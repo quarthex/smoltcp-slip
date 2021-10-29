@@ -1,6 +1,6 @@
 use crate::phy::{Eth, Slip};
+use embedded_hal::serial::{Read, Write};
 use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
-use smoltcp::phy::Device;
 use smoltcp::socket::SocketSet;
 use smoltcp::time::{Duration, Instant};
 use smoltcp::wire::{EthernetAddress, Ipv4Address, Ipv4Cidr};
@@ -9,7 +9,7 @@ use std::collections::BTreeMap;
 /// SLIP interface
 pub struct Interface<'a, T>
 where
-    T: for<'d> Device<'d>,
+    T: 'static + Read<u8> + Write<u8>,
 {
     local_addr: Ipv4Address,
     peer_addr: Ipv4Address,
@@ -18,7 +18,7 @@ where
 
 impl<'a, T> Interface<'a, T>
 where
-    T: for<'d> Device<'d>,
+    T: Read<u8> + Write<u8>,
 {
     /// Create a new SLIP interface.
     ///
@@ -95,10 +95,10 @@ where
 #[cfg(test)]
 mod tests {
     use super::Interface;
-    use crate::tests::Mock;
+    use embedded_hal_mock::serial::{Mock, Transaction};
     use log::info;
     use simple_logger::SimpleLogger;
-    use slip_codec::{encode, Decoder};
+    use slip_codec::encode;
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer, SocketSet};
     use smoltcp::storage::PacketMetadata;
@@ -114,7 +114,7 @@ mod tests {
         SimpleLogger::new().init().ok();
 
         // create a fake SLIP device
-        let device = Mock::default();
+        let device = Mock::new(&[]);
 
         // create a SLIP interface
         let mut iface = Interface::new(
@@ -143,15 +143,37 @@ mod tests {
             socket.bind(IcmpEndpoint::Ident(1)).unwrap();
 
             info!("send ping");
-            let repr = Icmpv4Repr::EchoRequest {
+            let icmp_repr = Icmpv4Repr::EchoRequest {
                 ident: 1,
                 seq_no: 1,
                 data: b"0123456789",
             };
-            let mut buffer = vec![0; repr.buffer_len()];
-            let mut packet = Icmpv4Packet::new_checked(&mut buffer)?;
-            repr.emit(&mut packet, &ChecksumCapabilities::default());
-            socket.send_slice(packet.into_inner(), iface.peer_addr().into())?;
+            let ip_repr = Ipv4Repr {
+                src_addr: iface.local_addr(),
+                dst_addr: iface.peer_addr(),
+                protocol: IpProtocol::Icmp,
+                payload_len: icmp_repr.buffer_len(),
+                hop_limit: 64,
+            };
+            let ip_buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
+            let mut ip_packet = Ipv4Packet::new_checked(ip_buf)?;
+            let caps = ChecksumCapabilities::default();
+            ip_repr.emit(&mut ip_packet, &caps);
+
+            let mut icmp_packet = Icmpv4Packet::new_checked(ip_packet.payload_mut())?;
+            icmp_repr.emit(&mut icmp_packet, &caps);
+            socket.send_slice(icmp_packet.into_inner(), iface.peer_addr().into())?;
+
+            // Check transmitted SLIP frame
+            let ip_buf = ip_packet.into_inner();
+            let mut slip_buf = Vec::with_capacity(ip_buf.len() * 2 + 2);
+            encode(&ip_buf, &mut slip_buf).unwrap();
+            iface.device_mut().expect(&[
+                Transaction::read_error(nb::Error::WouldBlock),
+                Transaction::read_error(nb::Error::WouldBlock),
+                Transaction::write_many(slip_buf),
+                Transaction::read_error(nb::Error::WouldBlock),
+            ]);
         }
 
         let timestamp = Instant::from_millis(0);
@@ -162,36 +184,7 @@ mod tests {
         );
         assert!(iface.poll(&mut sockets, timestamp)?);
         assert_eq!(iface.poll_delay(&mut sockets, timestamp), None);
-        assert_eq!(iface.device().rx, Vec::new());
-
-        // Check transmitted packet
-        {
-            let tx = &mut iface.device_mut().tx;
-            let mut decoder = Decoder::new();
-            let mut ip_buf = Vec::new();
-            decoder.decode(&mut &tx[..], &mut ip_buf).unwrap();
-            *tx = Vec::new();
-            let packet = Ipv4Packet::new_checked(&ip_buf)?;
-            let repr = Ipv4Repr::parse(&packet, &ChecksumCapabilities::default())?;
-            assert_eq!(repr.src_addr, iface.local_addr());
-            assert_eq!(repr.dst_addr, iface.peer_addr());
-            assert_eq!(repr.protocol, IpProtocol::Icmp);
-            assert_eq!(repr.hop_limit, 64);
-            let packet = Icmpv4Packet::new_checked(packet.payload())?;
-            let repr = Icmpv4Repr::parse(&packet, &ChecksumCapabilities::default())?;
-            if let Icmpv4Repr::EchoRequest {
-                ident,
-                seq_no,
-                data,
-            } = repr
-            {
-                assert_eq!(ident, 1);
-                assert_eq!(seq_no, 1);
-                assert_eq!(data, b"0123456789");
-            } else {
-                panic!();
-            }
-        }
+        iface.device_mut().done();
 
         // Send response
         {
@@ -208,15 +201,20 @@ mod tests {
                 hop_limit: 64,
             };
             let mut buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
-            let mut packet = Ipv4Packet::new_checked(&mut buf)?;
+            let mut ip_packet = Ipv4Packet::new_checked(&mut buf)?;
             let caps = ChecksumCapabilities::default();
-            ip_repr.emit(&mut packet, &caps);
-            {
-                let mut packet = Icmpv4Packet::new_checked(packet.payload_mut())?;
-                icmp_repr.emit(&mut packet, &caps);
-            }
-            let mut rx = &mut iface.device_mut().rx;
-            encode(packet.into_inner(), &mut rx).unwrap();
+            ip_repr.emit(&mut ip_packet, &caps);
+
+            let mut imcp_packet = Icmpv4Packet::new_checked(ip_packet.payload_mut())?;
+            icmp_repr.emit(&mut imcp_packet, &caps);
+
+            let mut slip_buf = Vec::with_capacity(buf.len() * 2 + 2);
+            encode(&buf, &mut slip_buf).unwrap();
+            iface.device_mut().expect(&[
+                Transaction::read_many(slip_buf),
+                Transaction::read_error(nb::Error::WouldBlock),
+                Transaction::read_error(nb::Error::WouldBlock),
+            ]);
         }
 
         assert!(iface.poll(&mut sockets, Instant::from_millis(0))?);
@@ -224,6 +222,7 @@ mod tests {
             iface.poll_delay(&mut sockets, Instant::from_millis(0)),
             None
         );
+        iface.device_mut().done();
 
         {
             info!("receive pong");

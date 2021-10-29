@@ -4,9 +4,12 @@ version = "0.1.0"
 edition = "2018"
 
 [dependencies]
+embedded-hal = "0.2.5"
 log = "0.4.14"
+nb = "1.0.0"
 slip-codec = "0.2.4"
 smoltcp = "0.7.1"
 
 [dev-dependencies]
+embedded-hal-mock = "0.7.2"
 simple_logger = "1.11.0"

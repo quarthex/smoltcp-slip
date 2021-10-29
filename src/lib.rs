@@ -3,7 +3,5 @@
 
 mod iface;
 mod phy;
-#[cfg(test)]
-mod tests;
 
 pub use iface::Interface as SlipInterface;

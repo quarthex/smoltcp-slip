@@ -198,80 +198,144 @@ impl<T> AsMut<T> for Eth<T> {
 #[cfg(test)]
 mod tests {
     use super::{Eth, LOCAL_ADDR, PEER_ADDR};
-    use crate::tests::Mock;
-    use smoltcp::phy::{ChecksumCapabilities, Device, RxToken, TxToken};
+    use embedded_hal::serial::{Read, Write};
+    use embedded_hal_mock::serial::{Mock, Transaction};
+    use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, RxToken, TxToken};
     use smoltcp::time::Instant;
     use smoltcp::wire::{
         ArpOperation, ArpPacket, ArpRepr, EthernetAddress, EthernetFrame, EthernetProtocol,
         EthernetRepr, Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr,
     };
-    use smoltcp::Result;
+    use std::sync::{Arc, Mutex};
 
-    impl Mock {
-        fn ipv4_frame() -> Result<Vec<u8>> {
-            let caps = ChecksumCapabilities::default();
-            let icmp_repr = Icmpv4Repr::EchoRequest {
-                ident: 0,
-                seq_no: 0,
-                data: b"HELO",
-            };
-            let ip_repr = Ipv4Repr {
-                src_addr: Ipv4Address::new(192, 168, 0, 1),
-                dst_addr: Ipv4Address::new(192, 168, 0, 2),
-                protocol: IpProtocol::Icmp,
-                payload_len: icmp_repr.buffer_len(),
-                hop_limit: 0,
-            };
-            let mut buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
-            ip_repr.emit(&mut Ipv4Packet::new_checked(&mut buf)?, &caps);
-            icmp_repr.emit(
-                &mut Icmpv4Packet::new_checked(&mut buf[ip_repr.buffer_len()..])?,
-                &caps,
-            );
-            Ok(buf)
-        }
+    struct MockDevice(Arc<Mutex<Mock<u8>>>);
 
-        fn eth_frame() -> Result<Vec<u8>> {
-            let ipv4_frame = Self::ipv4_frame()?;
-            let eth_repr = EthernetRepr {
-                src_addr: PEER_ADDR,
-                dst_addr: LOCAL_ADDR,
-                ethertype: EthernetProtocol::Ipv4,
-            };
-            let mut buf = vec![0; eth_repr.buffer_len() + ipv4_frame.len()];
-            eth_repr.emit(&mut EthernetFrame::new_checked(&mut buf)?);
-            buf[eth_repr.buffer_len()..].copy_from_slice(&ipv4_frame);
-            Ok(buf)
+    impl MockDevice {
+        fn done(&self) {
+            self.0.lock().unwrap().done()
         }
     }
 
+    impl From<Mock<u8>> for MockDevice {
+        fn from(mock: Mock<u8>) -> Self {
+            Self(Arc::new(Mutex::new(mock)))
+        }
+    }
+
+    impl<'a> Device<'a> for MockDevice {
+        type RxToken = Self;
+        type TxToken = Self;
+
+        fn receive(&'a mut self) -> std::option::Option<(Self::RxToken, Self::TxToken)> {
+            let rx = Self(self.0.clone());
+            let tx = Self(self.0.clone());
+            Some((rx, tx))
+        }
+
+        fn transmit(&'a mut self) -> std::option::Option<Self::TxToken> {
+            Some(Self(self.0.clone()))
+        }
+
+        fn capabilities(&self) -> DeviceCapabilities {
+            DeviceCapabilities::default()
+        }
+    }
+
+    impl RxToken for MockDevice {
+        fn consume<R, F>(self, _timestamp: Instant, f: F) -> smoltcp::Result<R>
+        where
+            F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        {
+            let mut buf = Vec::new();
+            loop {
+                match self.0.lock().unwrap().read() {
+                    Ok(b) => buf.push(b),
+                    Err(nb::Error::Other(err)) => panic!("{}", err),
+                    Err(nb::Error::WouldBlock) => return f(&mut buf),
+                }
+            }
+        }
+    }
+
+    impl TxToken for MockDevice {
+        fn consume<R, F>(self, _timestamp: Instant, len: usize, f: F) -> smoltcp::Result<R>
+        where
+            F: FnOnce(&mut [u8]) -> smoltcp::Result<R>,
+        {
+            let mut buf = vec![0; len];
+            let res = f(&mut buf);
+            for b in buf.into_iter() {
+                self.0.lock().unwrap().write(b).unwrap()
+            }
+            res
+        }
+    }
+
+    fn ipv4_frame() -> Vec<u8> {
+        let caps = ChecksumCapabilities::default();
+        let icmp_repr = Icmpv4Repr::EchoRequest {
+            ident: 0,
+            seq_no: 0,
+            data: b"HELO",
+        };
+        let ip_repr = Ipv4Repr {
+            src_addr: Ipv4Address::new(192, 168, 0, 1),
+            dst_addr: Ipv4Address::new(192, 168, 0, 2),
+            protocol: IpProtocol::Icmp,
+            payload_len: icmp_repr.buffer_len(),
+            hop_limit: 0,
+        };
+        let mut buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
+        ip_repr.emit(&mut Ipv4Packet::new_checked(&mut buf).unwrap(), &caps);
+        icmp_repr.emit(
+            &mut Icmpv4Packet::new_checked(&mut buf[ip_repr.buffer_len()..]).unwrap(),
+            &caps,
+        );
+        buf
+    }
+
+    fn eth_frame() -> Vec<u8> {
+        let ipv4_frame = ipv4_frame();
+        let eth_repr = EthernetRepr {
+            src_addr: PEER_ADDR,
+            dst_addr: LOCAL_ADDR,
+            ethertype: EthernetProtocol::Ipv4,
+        };
+        let mut buf = vec![0; eth_repr.buffer_len() + ipv4_frame.len()];
+        eth_repr.emit(&mut EthernetFrame::new_checked(&mut buf).unwrap());
+        buf[eth_repr.buffer_len()..].copy_from_slice(&ipv4_frame);
+        buf
+    }
+
     #[test]
-    fn rx() -> Result<()> {
-        let mut eth = Eth::from(Mock::default());
-        eth.as_mut().rx = Mock::ipv4_frame()?;
+    fn rx() {
+        let mock = Mock::new(&[
+            Transaction::read_many(ipv4_frame()),
+            Transaction::read_error(nb::Error::WouldBlock),
+        ]);
+        let mut eth = Eth::from(MockDevice::from(mock));
         let (rx, _tx) = eth.receive().unwrap();
-        rx.consume(Instant::from_millis(0), |buf| {
-            assert_eq!(buf, Mock::eth_frame()?);
-            Ok(())
-        })
+        rx.consume(Instant::from_millis(0), |_| Ok(())).unwrap();
+        eth.as_ref().done();
     }
 
     #[test]
-    fn tx() -> Result<()> {
-        let mut eth = Eth::from(Mock::default());
+    fn tx() {
+        let mock = Mock::new(&[Transaction::write_many(ipv4_frame())]);
+        let mut eth = Eth::from(MockDevice::from(mock));
         let tx = eth.transmit().unwrap();
-        let eth_frame = Mock::eth_frame()?;
+        let eth_frame = eth_frame();
         tx.consume(Instant::from_millis(0), eth_frame.len(), |buf| {
             buf.copy_from_slice(&eth_frame);
             Ok(())
-        })?;
-        assert_eq!(eth.as_ref().tx, Mock::ipv4_frame()?);
-        Ok(())
+        })
+        .unwrap();
+        eth.as_ref().done();
     }
 
     #[test]
-    fn arp() -> Result<()> {
-        let mut eth = Eth::from(Mock::default());
+    fn arp() {
+        let mut eth = Eth::from(MockDevice::from(Mock::new(&[])));
 
         let tx = eth.transmit().unwrap();
         let repr = ArpRepr::EthernetIpv4 {
@@ -297,8 +361,8 @@ mod tests {
                 repr.emit(&mut packet);
                 Ok(())
             },
-        )?;
-        assert!(eth.as_ref().tx.is_empty());
+        )
+        .unwrap();
 
         let (rx, _tx) = eth.receive().unwrap();
         rx.consume(Instant::from_millis(0), |buf| {
@@ -321,5 +385,8 @@ mod tests {
             );
             Ok(())
         })
+        .unwrap();
+
+        eth.as_ref().done();
     }
 }
