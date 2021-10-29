@@ -51,6 +51,7 @@ where
     pub fn device(&self) -> &T {
         self.iface.device().as_ref().as_ref()
     }
+
     /// Get a mutable reference to the inner serial device.
     pub fn device_mut(&mut self) -> &mut T {
         self.iface.device_mut().as_mut().as_mut()
@@ -89,6 +90,15 @@ where
     /// [poll]: Self::poll
     pub fn poll_delay(&self, sockets: &mut SocketSet, timestamp: Instant) -> Option<Duration> {
         self.iface.poll_delay(sockets, timestamp)
+    }
+}
+
+impl<'a, T> From<Interface<'a, T>> for EthernetInterface<'a, Eth<Slip<T>>>
+where
+    T: Read<u8> + Write<u8>,
+{
+    fn from(iface: Interface<'a, T>) -> Self {
+        iface.iface
     }
 }
 
