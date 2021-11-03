@@ -5,11 +5,13 @@ use slip_codec::{encode, Decoder};
 use smoltcp::phy::{Device, DeviceCapabilities, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::Result;
+use std::collections::VecDeque;
+use std::io;
 
 pub struct Slip<T> {
     serial: T,
     decoder: Decoder,
-    tx: Vec<u8>,
+    tx: VecDeque<u8>,
     rx: Vec<u8>,
 }
 
@@ -17,10 +19,10 @@ impl<T> Slip<T>
 where
     T: Write<u8>,
 {
-    fn drain(serial: &mut T, tx: &mut Vec<u8>) {
-        while let Some(b) = tx.first().copied() {
+    fn drain(serial: &mut T, tx: &mut VecDeque<u8>) {
+        while let Some(b) = tx.front().copied() {
             match serial.write(b) {
-                Ok(()) => tx.remove(0),
+                Ok(()) => tx.pop_front(),
                 Err(nb::Error::Other(..)) => {
                     error!("failed to send a frame");
                     tx.truncate(0);
@@ -96,7 +98,7 @@ impl RxToken for SlipRxToken<'_> {
 
 pub struct SlipTxToken<'a, T> {
     serial: &'a mut T,
-    tx: &'a mut Vec<u8>,
+    tx: &'a mut VecDeque<u8>,
 }
 
 impl<T> TxToken for SlipTxToken<'_, T>
@@ -107,11 +109,24 @@ where
     where
         F: FnOnce(&mut [u8]) -> Result<R>,
     {
+        struct VecDequeWrap<'a>(&'a mut VecDeque<u8>);
+
+        impl io::Write for VecDequeWrap<'_> {
+            fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+                self.0.extend(buf);
+                Ok(buf.len())
+            }
+
+            fn flush(&mut self) -> io::Result<()> {
+                Ok(())
+            }
+        }
+
         let Self { serial, tx } = self;
         let mut buf = vec![0; len];
         let res = f(&mut buf)?;
         tx.reserve(len * 2 + 2);
-        encode(&buf, tx).unwrap();
+        encode(&buf, &mut VecDequeWrap(tx)).unwrap();
         Slip::drain(serial, tx);
         Ok(res)
     }
@@ -122,7 +137,7 @@ impl<T> From<T> for Slip<T> {
         Self {
             serial,
             decoder: Decoder::new(),
-            tx: Vec::new(),
+            tx: VecDeque::new(),
             rx: Vec::new(),
         }
     }
