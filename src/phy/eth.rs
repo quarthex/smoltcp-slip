@@ -76,14 +76,14 @@ where
     {
         match self {
             Self::Token(token) => token.consume(timestamp, |buf| {
-                let repr = EthernetRepr {
+                let eth_repr = EthernetRepr {
                     src_addr: PEER_ADDR,
                     dst_addr: LOCAL_ADDR,
                     ethertype: EthernetProtocol::Ipv4,
                 };
-                let mut vec = vec![0; repr.buffer_len() + buf.len()];
+                let mut vec = vec![0; ETHERNET_HEADER_LEN + buf.len()];
                 let mut frame = EthernetFrame::new_checked(&mut vec)?;
-                repr.emit(&mut frame);
+                eth_repr.emit(&mut frame);
                 frame.payload_mut().copy_from_slice(buf);
                 f(frame.into_inner())
             }),
@@ -100,7 +100,7 @@ where
                     target_hardware_addr: LOCAL_ADDR,
                     target_protocol_addr: source,
                 };
-                let mut buf = vec![0; eth_repr.buffer_len() + arp_repr.buffer_len()];
+                let mut buf = vec![0; ETHERNET_HEADER_LEN + arp_repr.buffer_len()];
                 let mut eth_frame = EthernetFrame::new_checked(&mut buf)?;
                 eth_repr.emit(&mut eth_frame);
                 let mut arp_packet = ArpPacket::new_checked(eth_frame.payload_mut())?;
@@ -205,6 +205,7 @@ mod tests {
     use smoltcp::wire::{
         ArpOperation, ArpPacket, ArpRepr, EthernetAddress, EthernetFrame, EthernetProtocol,
         EthernetRepr, Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr,
+        ETHERNET_HEADER_LEN,
     };
     use std::sync::{Arc, Mutex};
 
@@ -226,13 +227,13 @@ mod tests {
         type RxToken = Self;
         type TxToken = Self;
 
-        fn receive(&'a mut self) -> std::option::Option<(Self::RxToken, Self::TxToken)> {
+        fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
             let rx = Self(self.0.clone());
             let tx = Self(self.0.clone());
             Some((rx, tx))
         }
 
-        fn transmit(&'a mut self) -> std::option::Option<Self::TxToken> {
+        fn transmit(&'a mut self) -> Option<Self::TxToken> {
             Some(Self(self.0.clone()))
         }
 
@@ -301,9 +302,9 @@ mod tests {
             dst_addr: LOCAL_ADDR,
             ethertype: EthernetProtocol::Ipv4,
         };
-        let mut buf = vec![0; eth_repr.buffer_len() + ipv4_frame.len()];
+        let mut buf = vec![0; ETHERNET_HEADER_LEN + ipv4_frame.len()];
         eth_repr.emit(&mut EthernetFrame::new_checked(&mut buf).unwrap());
-        buf[eth_repr.buffer_len()..].copy_from_slice(&ipv4_frame);
+        buf[ETHERNET_HEADER_LEN..].copy_from_slice(&ipv4_frame);
         buf
     }
 
@@ -338,7 +339,7 @@ mod tests {
         let mut eth = Eth::from(MockDevice::from(Mock::new(&[])));
 
         let tx = eth.transmit().unwrap();
-        let repr = ArpRepr::EthernetIpv4 {
+        let arp_repr = ArpRepr::EthernetIpv4 {
             operation: ArpOperation::Request,
             source_hardware_addr: LOCAL_ADDR,
             source_protocol_addr: Ipv4Address::new(192, 168, 0, 1),
@@ -353,12 +354,12 @@ mod tests {
 
         tx.consume(
             Instant::from_millis(0),
-            eth_repr.buffer_len() + repr.buffer_len(),
+            ETHERNET_HEADER_LEN + arp_repr.buffer_len(),
             |buf| {
                 let mut packet = EthernetFrame::new_checked(buf)?;
                 eth_repr.emit(&mut packet);
                 let mut packet = ArpPacket::new_checked(packet.payload_mut())?;
-                repr.emit(&mut packet);
+                arp_repr.emit(&mut packet);
                 Ok(())
             },
         )
