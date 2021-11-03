@@ -163,11 +163,11 @@ mod tests {
         let timestamp = Instant::from_millis(0);
         assert!(!iface.poll(&mut sockets, timestamp)?);
         assert_eq!(
-            iface.poll_delay(&mut sockets, timestamp),
+            iface.poll_delay(&sockets, timestamp),
             Some(Duration::from_secs(3))
         );
         assert!(iface.poll(&mut sockets, timestamp)?);
-        assert_eq!(iface.poll_delay(&mut sockets, timestamp), None);
+        assert_eq!(iface.poll_delay(&sockets, timestamp), None);
         iface.device_mut().as_mut().as_mut().done();
 
         // Send response
@@ -202,10 +202,7 @@ mod tests {
         }
 
         assert!(iface.poll(&mut sockets, Instant::from_millis(0))?);
-        assert_eq!(
-            iface.poll_delay(&mut sockets, Instant::from_millis(0)),
-            None
-        );
+        assert_eq!(iface.poll_delay(&sockets, Instant::from_millis(0)), None);
         iface.device_mut().as_mut().as_mut().done();
 
         {
