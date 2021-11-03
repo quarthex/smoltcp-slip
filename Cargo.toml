@@ -1,7 +1,14 @@
 [package]
 name = "smoltcp-slip"
 version = "0.1.0"
+authors = ["Romain Déoux <romain.deoux@gmail.com>"]
 edition = "2018"
+description = "SLIP network interface on top of smoltcp"
+readme = "README.md"
+repository = "https://github.com/quarthex/smoltcp-slip"
+license = "MIT"
+keywords = ["slip", "smoltcp"]
+categories = ["embedded", "network-programming"]
 
 [dependencies]
 embedded-hal = "0.2.5"

@@ -1,3 +1,4 @@
+#![warn(clippy::cargo)]
 #![warn(clippy::nursery)]
 #![warn(clippy::pedantic)]
 #![warn(missing_docs)]
