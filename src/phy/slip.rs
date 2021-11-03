@@ -42,29 +42,30 @@ where
     type TxToken = SlipTxToken<'a, T>;
 
     fn receive(&'a mut self) -> Option<(Self::RxToken, Self::TxToken)> {
-        Slip::drain(&mut self.serial, &mut self.tx);
+        Self::drain(&mut self.serial, &mut self.tx);
         loop {
+            use nb::Error;
             match self.serial.read() {
-                Ok(b) => match self.decoder.decode(&mut &[b][..], &mut self.rx) {
-                    Ok(size) => {
-                        debug_assert!(self.rx.len() == size);
-                        let Self { serial, tx, rx, .. } = self;
-                        let rx_token = Self::RxToken { rx };
-                        let tx_token = Self::TxToken { serial, tx };
-                        return Some((rx_token, tx_token));
+                Ok(b) => {
+                    use slip_codec::Error;
+                    match self.decoder.decode(&mut &[b][..], &mut self.rx) {
+                        Ok(size) => {
+                            debug_assert!(self.rx.len() == size);
+                            let Self { serial, tx, rx, .. } = self;
+                            let rx_token = Self::RxToken { rx };
+                            let tx_token = Self::TxToken { serial, tx };
+                            return Some((rx_token, tx_token));
+                        }
+                        Err(Error::FramingError) => error!("framing error"),
+                        Err(Error::OversizedPacket | Error::ReadError(..)) => unimplemented!(),
+                        Err(Error::EndOfStream) => {}
                     }
-                    Err(slip_codec::Error::FramingError) => {
-                        error!("framing error")
-                    }
-                    Err(slip_codec::Error::OversizedPacket) => unimplemented!(),
-                    Err(slip_codec::Error::EndOfStream) => {}
-                    Err(slip_codec::Error::ReadError(..)) => unimplemented!(),
-                },
-                Err(nb::Error::Other(..)) => {
+                }
+                Err(Error::Other(..)) => {
                     error!("failed to read from the serial port");
                     return None;
                 }
-                Err(nb::Error::WouldBlock) => return None,
+                Err(Error::WouldBlock) => return None,
             }
         }
     }
@@ -82,6 +83,7 @@ where
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
 pub struct SlipRxToken<'a> {
     rx: &'a mut Vec<u8>,
 }
@@ -96,6 +98,7 @@ impl RxToken for SlipRxToken<'_> {
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
 pub struct SlipTxToken<'a, T> {
     serial: &'a mut T,
     tx: &'a mut VecDeque<u8>,

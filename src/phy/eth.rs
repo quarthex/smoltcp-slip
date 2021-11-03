@@ -44,11 +44,9 @@ where
 
     fn transmit(&'a mut self) -> Option<Self::TxToken> {
         let Self { inner, arp } = self;
-        if let Some(token) = inner.transmit() {
-            Some(Self::TxToken::Token { token, arp })
-        } else {
-            None
-        }
+        inner
+            .transmit()
+            .map(move |token| Self::TxToken::Token { token, arp })
     }
 
     fn capabilities(&self) -> DeviceCapabilities {
@@ -61,6 +59,7 @@ where
 const LOCAL_ADDR: EthernetAddress = EthernetAddress([0, 0, 0, 0, 0, 0]);
 const PEER_ADDR: EthernetAddress = EthernetAddress([0, 0, 0, 0, 0, 1]);
 
+#[allow(clippy::module_name_repetitions)]
 pub enum EthRxToken<T> {
     Token(T),
     Arp(ArpReq),
@@ -111,6 +110,7 @@ where
     }
 }
 
+#[allow(clippy::module_name_repetitions)]
 pub enum EthTxToken<'a, T> {
     Token {
         token: T,
@@ -213,7 +213,7 @@ mod tests {
 
     impl MockDevice {
         fn done(&self) {
-            self.0.lock().unwrap().done()
+            self.0.lock().unwrap().done();
         }
     }
 
@@ -265,8 +265,8 @@ mod tests {
         {
             let mut buf = vec![0; len];
             let res = f(&mut buf);
-            for b in buf.into_iter() {
-                self.0.lock().unwrap().write(b).unwrap()
+            for b in buf {
+                self.0.lock().unwrap().write(b).unwrap();
             }
             res
         }

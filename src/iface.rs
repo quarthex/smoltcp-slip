@@ -95,14 +95,15 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     #[test]
     fn ping() -> Result<()> {
+        const LOCAL_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 1]);
+        const PEER_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 2]);
+
         SimpleLogger::new().init().ok();
 
         // create a fake SLIP device
         let device = Mock::new(&[]);
 
         // create a SLIP interface
-        const LOCAL_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 1]);
-        const PEER_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 2]);
         let iface = Interface::new(device, Ipv4Cidr::new(LOCAL_ADDR, 24), PEER_ADDR);
         let mut iface = EthernetInterface::from(iface);
 
