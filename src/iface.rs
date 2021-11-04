@@ -78,12 +78,11 @@ where
 #[cfg(test)]
 mod tests {
     use super::Interface;
+    use crate::phy::slip::encode;
     use alloc::vec;
-    use alloc::vec::Vec;
     use embedded_hal_mock::serial::{Mock, Transaction};
     use log::info;
     use simple_logger::SimpleLogger;
-    use slip_codec::encode;
     use smoltcp::iface::EthernetInterface;
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer, SocketSet};
@@ -152,8 +151,7 @@ mod tests {
 
             // Check transmitted SLIP frame
             let ip_buf = ip_packet.into_inner();
-            let mut slip_buf = Vec::with_capacity(ip_buf.len() * 2 + 2);
-            encode(&ip_buf, &mut slip_buf).unwrap();
+            let slip_buf = encode(&ip_buf);
             iface.device_mut().as_mut().as_mut().expect(&[
                 Transaction::read_error(nb::Error::WouldBlock),
                 Transaction::read_error(nb::Error::WouldBlock),
@@ -194,8 +192,7 @@ mod tests {
             let mut imcp_packet = Icmpv4Packet::new_checked(ip_packet.payload_mut())?;
             icmp_repr.emit(&mut imcp_packet, &caps);
 
-            let mut slip_buf = Vec::with_capacity(buf.len() * 2 + 2);
-            encode(&buf, &mut slip_buf).unwrap();
+            let slip_buf = encode(&buf);
             iface.device_mut().as_mut().as_mut().expect(&[
                 Transaction::read_many(slip_buf),
                 Transaction::read_error(nb::Error::WouldBlock),
