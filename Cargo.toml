@@ -8,7 +8,7 @@ readme = "README.md"
 repository = "https://github.com/quarthex/smoltcp-slip"
 license = "MIT"
 keywords = ["slip", "smoltcp"]
-categories = ["embedded", "network-programming"]
+categories = ["embedded", "network-programming", "no-std"]
 
 [dependencies]
 embedded-hal = "0.2.5"
