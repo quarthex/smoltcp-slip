@@ -1,8 +1,8 @@
 use crate::phy::{Eth, Slip};
+use alloc::collections::BTreeMap;
 use embedded_hal::serial::{Read, Write};
 use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
 use smoltcp::wire::{EthernetAddress, Ipv4Address, Ipv4Cidr};
-use std::collections::BTreeMap;
 
 /// SLIP interface
 pub struct Interface<'a, T>
@@ -78,6 +78,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::Interface;
+    use alloc::vec;
+    use alloc::vec::Vec;
     use embedded_hal_mock::serial::{Mock, Transaction};
     use log::info;
     use simple_logger::SimpleLogger;

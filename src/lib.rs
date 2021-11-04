@@ -4,6 +4,8 @@
 #![warn(missing_docs)]
 #![doc = include_str!("../README.md")]
 
+extern crate alloc;
+
 mod iface;
 mod phy;
 

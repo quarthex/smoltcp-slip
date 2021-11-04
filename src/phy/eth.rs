@@ -1,3 +1,4 @@
+use alloc::vec;
 use log::error;
 use smoltcp::phy::{Device, DeviceCapabilities, RxToken, TxToken};
 use smoltcp::time::Instant;
@@ -198,6 +199,10 @@ impl<T> AsMut<T> for Eth<T> {
 #[cfg(test)]
 mod tests {
     use super::{Eth, LOCAL_ADDR, PEER_ADDR};
+    use alloc::rc::Rc;
+    use alloc::vec;
+    use alloc::vec::Vec;
+    use core::cell::RefCell;
     use embedded_hal::serial::{Read, Write};
     use embedded_hal_mock::serial::{Mock, Transaction};
     use smoltcp::phy::{ChecksumCapabilities, Device, DeviceCapabilities, RxToken, TxToken};
@@ -207,19 +212,18 @@ mod tests {
         EthernetRepr, Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Packet, Ipv4Repr,
         ETHERNET_HEADER_LEN,
     };
-    use std::sync::{Arc, Mutex};
 
-    struct MockDevice(Arc<Mutex<Mock<u8>>>);
+    struct MockDevice(Rc<RefCell<Mock<u8>>>);
 
     impl MockDevice {
         fn done(&self) {
-            self.0.lock().unwrap().done();
+            self.0.borrow_mut().done();
         }
     }
 
     impl From<Mock<u8>> for MockDevice {
         fn from(mock: Mock<u8>) -> Self {
-            Self(Arc::new(Mutex::new(mock)))
+            Self(Rc::new(RefCell::new(mock)))
         }
     }
 
@@ -249,7 +253,7 @@ mod tests {
         {
             let mut buf = Vec::new();
             loop {
-                match self.0.lock().unwrap().read() {
+                match self.0.borrow_mut().read() {
                     Ok(b) => buf.push(b),
                     Err(nb::Error::Other(err)) => panic!("{}", err),
                     Err(nb::Error::WouldBlock) => return f(&mut buf),
@@ -266,7 +270,7 @@ mod tests {
             let mut buf = vec![0; len];
             let res = f(&mut buf);
             for b in buf {
-                self.0.lock().unwrap().write(b).unwrap();
+                self.0.borrow_mut().write(b).unwrap();
             }
             res
         }

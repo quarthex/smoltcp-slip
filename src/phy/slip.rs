@@ -1,3 +1,6 @@
+use alloc::collections::VecDeque;
+use alloc::vec;
+use alloc::vec::Vec;
 use core::mem::take;
 use embedded_hal::serial::{Read, Write};
 use log::error;
@@ -5,7 +8,6 @@ use slip_codec::{encode, Decoder};
 use smoltcp::phy::{Device, DeviceCapabilities, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::Result;
-use std::collections::VecDeque;
 use std::io;
 
 pub struct Slip<T> {
@@ -78,7 +80,7 @@ where
 
     fn capabilities(&self) -> DeviceCapabilities {
         let mut capabilities = DeviceCapabilities::default();
-        capabilities.max_transmission_unit = (std::usize::MAX - 2) / 2;
+        capabilities.max_transmission_unit = (core::usize::MAX - 2) / 2;
         capabilities
     }
 }
