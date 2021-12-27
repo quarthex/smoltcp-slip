@@ -222,6 +222,28 @@ mod tests {
     }
 
     #[test]
+    fn rx_bad_header() {
+        let serial = Mock::new(&[
+            Transaction::read_many(DECODED),
+            Transaction::read_error(nb::Error::WouldBlock),
+        ]);
+        let mut slip = SlipDevice::from(serial);
+        assert!(slip.receive().is_none());
+        slip.as_mut().done();
+    }
+
+    #[test]
+    fn rx_bad_escape_sequence() {
+        let serial = Mock::new(&[
+            Transaction::read_many(b"\xc0HE\xdbLO\xc0"),
+            Transaction::read_error(nb::Error::WouldBlock),
+        ]);
+        let mut slip = SlipDevice::from(serial);
+        assert!(slip.receive().is_none());
+        slip.as_mut().done();
+    }
+
+    #[test]
     fn tx() -> Result<()> {
         let serial = Mock::new(&[Transaction::write_many(ENCODED)]);
         let mut slip = SlipDevice::from(serial);
