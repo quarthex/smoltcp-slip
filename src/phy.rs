@@ -5,7 +5,7 @@ use core::mem::take;
 use embedded_hal::serial::{Read, Write};
 use log::error;
 use serial_line_ip::{Decoder, Encoder};
-use smoltcp::phy::{Device, DeviceCapabilities, RxToken, TxToken};
+use smoltcp::phy::{Device, DeviceCapabilities, Medium, RxToken, TxToken};
 use smoltcp::time::Instant;
 use smoltcp::Result;
 
@@ -119,6 +119,7 @@ where
     fn capabilities(&self) -> DeviceCapabilities {
         let mut capabilities = DeviceCapabilities::default();
         capabilities.max_transmission_unit = (core::usize::MAX - 2) / 2;
+        capabilities.medium = Medium::Ip;
         capabilities
     }
 }

@@ -1,9 +1,9 @@
-use crate::phy::{Eth, Slip};
+use crate::phy::Slip;
 use alloc::collections::BTreeMap;
 use alloc::vec::Vec;
 use embedded_hal::serial::{Read, Write};
-use smoltcp::iface::{Interface, InterfaceBuilder, NeighborCache, Routes};
-use smoltcp::wire::{EthernetAddress, HardwareAddress, Ipv4Address, Ipv4Cidr};
+use smoltcp::iface::{Interface, InterfaceBuilder, Routes};
+use smoltcp::wire::{Ipv4Address, Ipv4Cidr};
 
 /// SLIP interface
 pub struct SlipInterface<'a, T>
@@ -12,7 +12,7 @@ where
 {
     local_addr: Ipv4Address,
     peer_addr: Ipv4Address,
-    iface: Interface<'a, Eth<Slip<T>>>,
+    iface: Interface<'a, Slip<T>>,
 }
 
 impl<'a, T> SlipInterface<'a, T>
@@ -28,13 +28,11 @@ where
         L: Into<Ipv4Cidr>,
         P: Into<Ipv4Address>,
     {
-        let device = Eth::from(Slip::from(device));
+        let device = Slip::from(device);
         let local_addr = local_addr.into();
         let peer_addr = peer_addr.into();
         let mut iface = InterfaceBuilder::new(device, Vec::new())
-            .hardware_addr(HardwareAddress::Ethernet(EthernetAddress([0; 6])))
             .ip_addrs([local_addr.into()])
-            .neighbor_cache(NeighborCache::new(BTreeMap::new()))
             .routes(Routes::new(BTreeMap::new()))
             .finalize();
         let local_addr = local_addr.address();
@@ -48,12 +46,12 @@ where
 
     /// Get a reference to the inner serial device.
     pub fn device(&self) -> &T {
-        self.iface.device().as_ref().as_ref()
+        self.iface.device().as_ref()
     }
 
     /// Get a mutable reference to the inner serial device.
     pub fn device_mut(&mut self) -> &mut T {
-        self.iface.device_mut().as_mut().as_mut()
+        self.iface.device_mut().as_mut()
     }
 
     /// Get the IPv4 address of the local device.
@@ -67,7 +65,7 @@ where
     }
 }
 
-impl<'a, T> From<SlipInterface<'a, T>> for Interface<'a, Eth<Slip<T>>>
+impl<'a, T> From<SlipInterface<'a, T>> for Interface<'a, Slip<T>>
 where
     T: Read<u8> + Write<u8>,
 {
@@ -79,7 +77,7 @@ where
 #[cfg(test)]
 mod tests {
     use super::SlipInterface;
-    use crate::phy::slip::encode;
+    use crate::phy::encode;
     use alloc::vec;
     use embedded_hal_mock::serial::{Mock, Transaction};
     use log::info;
@@ -88,7 +86,7 @@ mod tests {
     use smoltcp::phy::ChecksumCapabilities;
     use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer};
     use smoltcp::storage::PacketMetadata;
-    use smoltcp::time::{Duration, Instant};
+    use smoltcp::time::Instant;
     use smoltcp::wire::{
         Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Cidr, Ipv4Packet, Ipv4Repr,
     };
@@ -149,8 +147,7 @@ mod tests {
             // Check transmitted SLIP frame
             let ip_buf = ip_packet.into_inner();
             let slip_buf = encode(&ip_buf);
-            iface.device_mut().as_mut().as_mut().expect(&[
-                Transaction::read_error(nb::Error::WouldBlock),
+            iface.device_mut().as_mut().expect(&[
                 Transaction::read_error(nb::Error::WouldBlock),
                 Transaction::write_many(slip_buf),
                 Transaction::read_error(nb::Error::WouldBlock),
@@ -158,11 +155,9 @@ mod tests {
         }
 
         let timestamp = Instant::from_millis(0);
-        assert!(!iface.poll(timestamp)?);
-        assert_eq!(iface.poll_delay(timestamp), Some(Duration::from_secs(3)));
         assert!(iface.poll(timestamp)?);
         assert_eq!(iface.poll_delay(timestamp), None);
-        iface.device_mut().as_mut().as_mut().done();
+        iface.device_mut().as_mut().done();
 
         // Send response
         {
@@ -187,7 +182,7 @@ mod tests {
             icmp_repr.emit(&mut imcp_packet, &caps);
 
             let slip_buf = encode(&buf);
-            iface.device_mut().as_mut().as_mut().expect(&[
+            iface.device_mut().as_mut().expect(&[
                 Transaction::read_many(slip_buf),
                 Transaction::read_error(nb::Error::WouldBlock),
                 Transaction::read_error(nb::Error::WouldBlock),
@@ -196,7 +191,7 @@ mod tests {
 
         assert!(iface.poll(Instant::from_millis(0))?);
         assert_eq!(iface.poll_delay(Instant::from_millis(0)), None);
-        iface.device_mut().as_mut().as_mut().done();
+        iface.device_mut().as_mut().done();
 
         {
             info!("receive pong");
