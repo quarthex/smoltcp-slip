@@ -15,9 +15,9 @@ embedded-hal = "0.2.6"
 log = "0.4.14"
 nb = "1.0.0"
 serial-line-ip = "0.5.0"
-smoltcp = "0.7.5"
+smoltcp = "0.8.0"
 
 [dev-dependencies]
 embedded-hal-mock = "0.8.0"
 linux-embedded-hal = "0.3.2"
-simple_logger = "1.13.0"
+simple_logger = { version = "1.16.0", default-features = false, features = ["colors"] }

@@ -6,7 +6,7 @@ This crates aims to provide an implementation of the SLIP protocol for [smoltcp]
 
 ```rust no_run
 use linux_embedded_hal::Serial;
-use smoltcp::iface::EthernetInterface;
+use smoltcp::iface::Interface;
 use smoltcp::wire::{Ipv4Address, Ipv4Cidr};
 use smoltcp_slip::SlipInterface;
 
@@ -19,7 +19,7 @@ let peer_addr = Ipv4Address([192, 168, 1, 2]);
 let iface = SlipInterface::new(device, local_addr, peer_addr);
 
 // convert it to an ethernet interface
-let mut iface = EthernetInterface::from(iface);
+let mut iface = Interface::from(iface);
 
 // At this point, iface.poll() and the likes can be called.
 ```

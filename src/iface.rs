@@ -1,20 +1,21 @@
 use crate::phy::{Eth, Slip};
 use alloc::collections::BTreeMap;
+use alloc::vec::Vec;
 use embedded_hal::serial::{Read, Write};
-use smoltcp::iface::{EthernetInterface, EthernetInterfaceBuilder, NeighborCache, Routes};
-use smoltcp::wire::{EthernetAddress, Ipv4Address, Ipv4Cidr};
+use smoltcp::iface::{Interface, InterfaceBuilder, NeighborCache, Routes};
+use smoltcp::wire::{EthernetAddress, HardwareAddress, Ipv4Address, Ipv4Cidr};
 
 /// SLIP interface
-pub struct Interface<'a, T>
+pub struct SlipInterface<'a, T>
 where
     T: 'static + Read<u8> + Write<u8>,
 {
     local_addr: Ipv4Address,
     peer_addr: Ipv4Address,
-    iface: EthernetInterface<'a, Eth<Slip<T>>>,
+    iface: Interface<'a, Eth<Slip<T>>>,
 }
 
-impl<'a, T> Interface<'a, T>
+impl<'a, T> SlipInterface<'a, T>
 where
     T: Read<u8> + Write<u8>,
 {
@@ -30,15 +31,15 @@ where
         let device = Eth::from(Slip::from(device));
         let local_addr = local_addr.into();
         let peer_addr = peer_addr.into();
-        let mut iface = EthernetInterfaceBuilder::new(device)
-            .ethernet_addr(EthernetAddress([0; 6]))
+        let mut iface = InterfaceBuilder::new(device, Vec::new())
+            .hardware_addr(HardwareAddress::Ethernet(EthernetAddress([0; 6])))
             .ip_addrs([local_addr.into()])
             .neighbor_cache(NeighborCache::new(BTreeMap::new()))
             .routes(Routes::new(BTreeMap::new()))
             .finalize();
         let local_addr = local_addr.address();
         iface.routes_mut().add_default_ipv4_route(local_addr).ok();
-        Self {
+        SlipInterface {
             local_addr,
             peer_addr,
             iface,
@@ -66,26 +67,26 @@ where
     }
 }
 
-impl<'a, T> From<Interface<'a, T>> for EthernetInterface<'a, Eth<Slip<T>>>
+impl<'a, T> From<SlipInterface<'a, T>> for Interface<'a, Eth<Slip<T>>>
 where
     T: Read<u8> + Write<u8>,
 {
-    fn from(iface: Interface<'a, T>) -> Self {
+    fn from(iface: SlipInterface<'a, T>) -> Self {
         iface.iface
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::Interface;
+    use super::SlipInterface;
     use crate::phy::slip::encode;
     use alloc::vec;
     use embedded_hal_mock::serial::{Mock, Transaction};
     use log::info;
     use simple_logger::SimpleLogger;
-    use smoltcp::iface::EthernetInterface;
+    use smoltcp::iface::Interface;
     use smoltcp::phy::ChecksumCapabilities;
-    use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer, SocketSet};
+    use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer};
     use smoltcp::storage::PacketMetadata;
     use smoltcp::time::{Duration, Instant};
     use smoltcp::wire::{
@@ -105,12 +106,8 @@ mod tests {
         let device = Mock::new(&[]);
 
         // create a SLIP interface
-        let iface = Interface::new(device, Ipv4Cidr::new(LOCAL_ADDR, 24), PEER_ADDR);
-        let mut iface = EthernetInterface::from(iface);
-
-        // create a socket registry
-        let mut sockets = [None; 1];
-        let mut sockets = SocketSet::new(&mut sockets[..]);
+        let iface = SlipInterface::new(device, Ipv4Cidr::new(LOCAL_ADDR, 24), PEER_ADDR);
+        let mut iface = Interface::from(iface);
 
         // create a socket
         let rx_metadata_storage = [PacketMetadata::EMPTY; 1];
@@ -120,11 +117,11 @@ mod tests {
         let tx_payload_storage = [0; 18];
         let tx_buffer = IcmpSocketBuffer::new(tx_metadata_storage, tx_payload_storage);
         let socket = IcmpSocket::new(rx_buffer, tx_buffer);
-        let handle = sockets.add(socket);
+        let handle = iface.add_socket(socket);
 
         {
             info!("bind socket");
-            let mut socket = sockets.get::<IcmpSocket>(handle);
+            let socket = iface.get_socket::<IcmpSocket>(handle);
             socket.bind(IcmpEndpoint::Ident(1)).unwrap();
 
             info!("send ping");
@@ -161,13 +158,10 @@ mod tests {
         }
 
         let timestamp = Instant::from_millis(0);
-        assert!(!iface.poll(&mut sockets, timestamp)?);
-        assert_eq!(
-            iface.poll_delay(&sockets, timestamp),
-            Some(Duration::from_secs(3))
-        );
-        assert!(iface.poll(&mut sockets, timestamp)?);
-        assert_eq!(iface.poll_delay(&sockets, timestamp), None);
+        assert!(!iface.poll(timestamp)?);
+        assert_eq!(iface.poll_delay(timestamp), Some(Duration::from_secs(3)));
+        assert!(iface.poll(timestamp)?);
+        assert_eq!(iface.poll_delay(timestamp), None);
         iface.device_mut().as_mut().as_mut().done();
 
         // Send response
@@ -200,13 +194,13 @@ mod tests {
             ]);
         }
 
-        assert!(iface.poll(&mut sockets, Instant::from_millis(0))?);
-        assert_eq!(iface.poll_delay(&sockets, Instant::from_millis(0)), None);
+        assert!(iface.poll(Instant::from_millis(0))?);
+        assert_eq!(iface.poll_delay(Instant::from_millis(0)), None);
         iface.device_mut().as_mut().as_mut().done();
 
         {
             info!("receive pong");
-            let mut socket = sockets.get::<IcmpSocket>(handle);
+            let socket = iface.get_socket::<IcmpSocket>(handle);
             let (buf, addr) = socket.recv()?;
             assert_eq!(addr, PEER_ADDR.into());
             let packet = Icmpv4Packet::new_checked(buf)?;

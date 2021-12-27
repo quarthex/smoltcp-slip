@@ -10,4 +10,6 @@ extern crate alloc;
 mod iface;
 mod phy;
 
-pub use iface::Interface as SlipInterface;
+pub use embedded_hal;
+pub use iface::SlipInterface;
+pub use smoltcp;
