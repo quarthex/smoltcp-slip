@@ -33,14 +33,15 @@ pub fn encode(input: &[u8]) -> Vec<u8> {
     output
 }
 
-pub struct Slip<T> {
+/// SLIP device
+pub struct SlipDevice<T> {
     serial: T,
     decoder: Decoder,
     tx: VecDeque<u8>,
     rx: Vec<u8>,
 }
 
-impl<T> Slip<T>
+impl<T> SlipDevice<T>
 where
     T: Write<u8>,
 {
@@ -59,7 +60,7 @@ where
     }
 }
 
-impl<'a, T> Device<'a> for Slip<T>
+impl<'a, T> Device<'a> for SlipDevice<T>
 where
     T: 'a + Read<u8> + Write<u8>,
 {
@@ -157,12 +158,12 @@ where
         let mut buf = vec![0; len];
         let res = f(&mut buf)?;
         tx.extend(encode(&buf));
-        Slip::drain(serial, tx);
+        SlipDevice::drain(serial, tx);
         Ok(res)
     }
 }
 
-impl<T> From<T> for Slip<T> {
+impl<T> From<T> for SlipDevice<T> {
     fn from(serial: T) -> Self {
         Self {
             serial,
@@ -173,13 +174,13 @@ impl<T> From<T> for Slip<T> {
     }
 }
 
-impl<T> AsRef<T> for Slip<T> {
+impl<T> AsRef<T> for SlipDevice<T> {
     fn as_ref(&self) -> &T {
         &self.serial
     }
 }
 
-impl<T> AsMut<T> for Slip<T> {
+impl<T> AsMut<T> for SlipDevice<T> {
     fn as_mut(&mut self) -> &mut T {
         &mut self.serial
     }
@@ -187,10 +188,21 @@ impl<T> AsMut<T> for Slip<T> {
 
 #[cfg(test)]
 mod tests {
-    use super::Slip;
+    use super::SlipDevice;
+    use crate::phy::encode;
+    use alloc::vec;
+    use alloc::vec::Vec;
     use embedded_hal_mock::serial::{Mock, Transaction};
-    use smoltcp::phy::{Device, RxToken, TxToken};
+    use log::info;
+    use simple_logger::SimpleLogger;
+    use smoltcp::iface::InterfaceBuilder;
+    use smoltcp::phy::{ChecksumCapabilities, Device, RxToken, TxToken};
+    use smoltcp::socket::{IcmpEndpoint, IcmpSocket, IcmpSocketBuffer};
+    use smoltcp::storage::PacketMetadata;
     use smoltcp::time::Instant;
+    use smoltcp::wire::{
+        Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Cidr, Ipv4Packet, Ipv4Repr,
+    };
     use smoltcp::Result;
 
     const DECODED: [u8; 4] = *b"HELO";
@@ -199,7 +211,7 @@ mod tests {
     #[test]
     fn rx() -> Result<()> {
         let serial = Mock::new(&[Transaction::read_many(ENCODED)]);
-        let mut slip = Slip::from(serial);
+        let mut slip = SlipDevice::from(serial);
         let (rx, _tx) = slip.receive().unwrap();
         rx.consume(Instant::from_millis(0), |buf| {
             assert_eq!(buf, DECODED);
@@ -212,13 +224,136 @@ mod tests {
     #[test]
     fn tx() -> Result<()> {
         let serial = Mock::new(&[Transaction::write_many(ENCODED)]);
-        let mut slip = Slip::from(serial);
+        let mut slip = SlipDevice::from(serial);
         let tx = slip.transmit().unwrap();
         tx.consume(Instant::from_millis(0), 4, |buf| {
             buf.copy_from_slice(&DECODED);
             Ok(())
         })?;
         slip.as_mut().done();
+        Ok(())
+    }
+
+    #[allow(clippy::too_many_lines)]
+    #[test]
+    fn ping() -> Result<()> {
+        const LOCAL_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 1]);
+        const PEER_ADDR: Ipv4Address = Ipv4Address([192, 168, 1, 2]);
+
+        SimpleLogger::new().init().ok();
+
+        // create a fake SLIP device
+        let device = Mock::new(&[]);
+
+        // create an interface
+        let device = SlipDevice::from(device);
+        let mut iface = InterfaceBuilder::new(device, Vec::new())
+            .ip_addrs([Ipv4Cidr::new(LOCAL_ADDR, 24).into()])
+            .finalize();
+
+        // create a socket
+        let rx_metadata_storage = [PacketMetadata::EMPTY; 1];
+        let rx_payload_storage = [0; 18];
+        let rx_buffer = IcmpSocketBuffer::new(rx_metadata_storage, rx_payload_storage);
+        let tx_metadata_storage = [PacketMetadata::EMPTY; 1];
+        let tx_payload_storage = [0; 18];
+        let tx_buffer = IcmpSocketBuffer::new(tx_metadata_storage, tx_payload_storage);
+        let socket = IcmpSocket::new(rx_buffer, tx_buffer);
+        let handle = iface.add_socket(socket);
+
+        {
+            info!("bind socket");
+            let socket = iface.get_socket::<IcmpSocket>(handle);
+            socket.bind(IcmpEndpoint::Ident(1)).unwrap();
+
+            info!("send ping");
+            let icmp_repr = Icmpv4Repr::EchoRequest {
+                ident: 1,
+                seq_no: 1,
+                data: b"0123456789",
+            };
+            let ip_repr = Ipv4Repr {
+                src_addr: LOCAL_ADDR,
+                dst_addr: PEER_ADDR,
+                protocol: IpProtocol::Icmp,
+                payload_len: icmp_repr.buffer_len(),
+                hop_limit: 64,
+            };
+            let ip_buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
+            let mut ip_packet = Ipv4Packet::new_checked(ip_buf)?;
+            let caps = ChecksumCapabilities::default();
+            ip_repr.emit(&mut ip_packet, &caps);
+
+            let mut icmp_packet = Icmpv4Packet::new_checked(ip_packet.payload_mut())?;
+            icmp_repr.emit(&mut icmp_packet, &caps);
+            socket.send_slice(icmp_packet.into_inner(), PEER_ADDR.into())?;
+
+            // Check transmitted SLIP frame
+            let ip_buf = ip_packet.into_inner();
+            let slip_buf = encode(&ip_buf);
+            iface.device_mut().as_mut().expect(&[
+                Transaction::read_error(nb::Error::WouldBlock),
+                Transaction::write_many(slip_buf),
+                Transaction::read_error(nb::Error::WouldBlock),
+            ]);
+        }
+
+        let timestamp = Instant::from_millis(0);
+        assert!(iface.poll(timestamp)?);
+        assert_eq!(iface.poll_delay(timestamp), None);
+        iface.device_mut().as_mut().done();
+
+        // Send response
+        {
+            let icmp_repr = Icmpv4Repr::EchoReply {
+                ident: 1,
+                seq_no: 1,
+                data: b"0123456789",
+            };
+            let ip_repr = Ipv4Repr {
+                src_addr: PEER_ADDR,
+                dst_addr: LOCAL_ADDR,
+                protocol: IpProtocol::Icmp,
+                payload_len: icmp_repr.buffer_len(),
+                hop_limit: 64,
+            };
+            let mut buf = vec![0; ip_repr.buffer_len() + icmp_repr.buffer_len()];
+            let mut ip_packet = Ipv4Packet::new_checked(&mut buf)?;
+            let caps = ChecksumCapabilities::default();
+            ip_repr.emit(&mut ip_packet, &caps);
+
+            let mut imcp_packet = Icmpv4Packet::new_checked(ip_packet.payload_mut())?;
+            icmp_repr.emit(&mut imcp_packet, &caps);
+
+            let slip_buf = encode(&buf);
+            iface.device_mut().as_mut().expect(&[
+                Transaction::read_many(slip_buf),
+                Transaction::read_error(nb::Error::WouldBlock),
+                Transaction::read_error(nb::Error::WouldBlock),
+            ]);
+        }
+
+        assert!(iface.poll(Instant::from_millis(0))?);
+        assert_eq!(iface.poll_delay(Instant::from_millis(0)), None);
+        iface.device_mut().as_mut().done();
+
+        {
+            info!("receive pong");
+            let socket = iface.get_socket::<IcmpSocket>(handle);
+            let (buf, addr) = socket.recv()?;
+            assert_eq!(addr, PEER_ADDR.into());
+            let packet = Icmpv4Packet::new_checked(buf)?;
+            let repr = Icmpv4Repr::parse(&packet, &ChecksumCapabilities::default())?;
+            assert!(matches!(
+                repr,
+                Icmpv4Repr::EchoReply {
+                    ident: 1,
+                    seq_no: 1,
+                    data: b"0123456789"
+                }
+            ));
+        }
+
         Ok(())
     }
 }

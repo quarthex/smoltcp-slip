@@ -7,9 +7,8 @@
 
 extern crate alloc;
 
-mod iface;
 mod phy;
 
 pub use embedded_hal;
-pub use iface::SlipInterface;
+pub use phy::SlipDevice;
 pub use smoltcp;
