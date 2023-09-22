@@ -200,7 +200,8 @@ mod tests {
     use smoltcp::storage::PacketMetadata;
     use smoltcp::time::Instant;
     use smoltcp::wire::{
-        Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Cidr, Ipv4Packet, Ipv4Repr,
+        HardwareAddress, Icmpv4Packet, Icmpv4Repr, IpProtocol, Ipv4Address, Ipv4Cidr, Ipv4Packet,
+        Ipv4Repr,
     };
 
     const DECODED: [u8; 4] = *b"HELO";
@@ -259,7 +260,11 @@ mod tests {
 
         // create an interface
         let mut device = SlipDevice::from(device);
-        let mut iface = Interface::new(Config::default(), &mut device);
+        let mut iface = Interface::new(
+            Config::new(HardwareAddress::Ip),
+            &mut device,
+            Instant::now(),
+        );
         iface.update_ip_addrs(|ips| ips.push(Ipv4Cidr::new(LOCAL_ADDR, 24).into()).unwrap());
 
         // create a socket
